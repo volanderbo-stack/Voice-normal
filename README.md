@@ -14,7 +14,7 @@
 | 3 | `plan`: аналіз і маршрут | готово |
 | 4 | `process`: відновлення і зведення | готово |
 | 5 | Перевірка за гейтами, `report.md` | готово |
-| 6 | Skill і плагін Claude Code / Codex | — |
+| 6 | Skill і плагін Claude Code / Codex | готово |
 | 7 | Тести на зламаний вихід, документація | — |
 
 ## Встановлення на Windows
@@ -145,6 +145,50 @@ GPU NVIDIA не обов'язковий: без нього все працює �
 
 Дані й моделі зберігаються в `%LOCALAPPDATA%\voice-normal`. Щоб тримати їх деінде,
 задайте змінну `VOICE_NORMAL_HOME`.
+
+## Skill для Claude Code і Codex
+
+Агент сам проходить усі кроки: `doctor` → (з вашого дозволу) `install` → `plan` →
+`process`. Потім читає звіт і чесно каже, що пройшло, а що ні. Досить написати,
+наприклад: «почисти звук у D:\Відео\камера.mp4».
+
+**Варіант 1 — плагін Claude Code** (оновлюється командою `claude plugin update`):
+
+```powershell
+claude plugin marketplace add volanderbo-stack/Voice-normal
+claude plugin install voice-normal@voice-normal
+```
+
+Або всередині сесії: `/plugin marketplace add volanderbo-stack/Voice-normal`.
+Плагін — це окрема копія проєкту в кеші Claude Code, тож ML-пакети (≈1 ГБ) для неї
+ставляться окремо, коли агент уперше запустить `install`. Моделі спільні:
+вони лежать у `%LOCALAPPDATA%\voice-normal`.
+
+**Варіант 2 — з клону репозиторію** (для Claude Code і Codex одночасно):
+
+```powershell
+.\scripts\install-skill.ps1
+```
+
+Скрипт створює junction (посилання на папку; права адміністратора й режим розробника
+не потрібні) у двох місцях:
+
+- `%USERPROFILE%\.claude\skills\voice-normal`
+- `%USERPROFILE%\.agents\skills\voice-normal`
+
+Після `git pull` skill оновлюється сам. Якщо junction створити не вдалося (мережевий
+диск, синхронізована папка), скрипт копіює файли. Інші параметри:
+
+- `-Agent claude` або `-Agent codex` — лише для одного агента;
+- `-Mode copy` — завжди копіювати;
+- `-Uninstall` — прибрати.
+
+Чужу папку з такою самою назвою скрипт не перезапише. Реєстр, політику виконання
+й змінні середовища він не чіпає. Якщо PowerShell не дає запустити скрипт, виконайте
+`powershell -ExecutionPolicy Bypass -File .\scripts\install-skill.ps1` — це діє лише
+на цей запуск. На macOS і Linux: `scripts/install-skill.sh`.
+
+Після встановлення перезапустіть Claude Code або Codex.
 
 ## Ліцензія
 
