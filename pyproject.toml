@@ -1,0 +1,27 @@
+[project]
+name = "voice-normal"
+version = "0.1.0"
+description = "Локальне відновлення голосу із запису мови до подкастної якості"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11,<3.14"
+# Ядро свідомо легке: doctor має працювати до встановлення ~1 ГБ ML-пакетів.
+# Важкі залежності з'являться на етапі 2 в extra "ml".
+dependencies = []
+
+[project.scripts]
+voice-normal = "voice_normal.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voice_normal"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
