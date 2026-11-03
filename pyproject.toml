@@ -6,14 +6,50 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11,<3.14"
 # Ядро свідомо легке: doctor має працювати до встановлення ~1 ГБ ML-пакетів.
-# Важкі залежності з'являться на етапі 2 в extra "ml".
+# Важкі залежності ставить `voice-normal install` через extras нижче.
 dependencies = []
+
+[project.optional-dependencies]
+ml = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "soundfile>=0.12",
+    "transformers>=4.45",
+    "onnxruntime>=1.18",
+    "faster-whisper>=1.1",
+]
+# Збірка torch обирається одним із двох extras: на Windows wheel'и з PyPI лише для CPU,
+# тож обидва варіанти беремо з офіційних індексів PyTorch. Одна й та сама гілка 2.11
+# для CPU і CUDA: так результати не розходяться між пристроями, а TorchScript-файли
+# Sidon вантажаться версією, з якою їх перевіряли. torchaudio не потрібен — ресемплінг
+# і фільтри робить scipy.
+cpu = ["torch>=2.11,<2.12"]
+cuda = ["torch>=2.11,<2.12"]
 
 [project.scripts]
 voice-normal = "voice_normal.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [build-system]
 requires = ["hatchling>=1.25"]

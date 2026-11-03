@@ -20,7 +20,7 @@ try {
 $exitCode = 1
 try {
     $env:PYTHONIOENCODING = 'utf-8'
-    & uv run --quiet --project $PSScriptRoot voice-normal @args
+    & uv run --quiet --no-dev --project $PSScriptRoot voice-normal @args
     $exitCode = $LASTEXITCODE
 } finally {
     $env:PYTHONIOENCODING = $prevPyEncoding

@@ -12,7 +12,7 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +41,26 @@ jobs:
           $json = & "$env:GITHUB_WORKSPACE\voice-normal.ps1" doctor --json --lang ru | Out-String | ConvertFrom-Json
           if (-not $json.ok) { Write-Error $json.summary; exit 1 }
           if ($json.summary -notmatch 'voice-normal install') { Write-Error "unexpected summary: $($json.summary)"; exit 1 }
+
+      # Моделі (~1.5 ГБ) кешуються; ключ змінюється разом із реєстром у models.py.
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\vn-home\models
+          key: models-cpu-${{ hashFiles('src/voice_normal/models.py') }}
+
+      - name: Install packages and models, smoke-test them
+        shell: pwsh
+        env:
+          VOICE_NORMAL_HOME: ${{ runner.temp }}\vn-home
+        run: |
+          $out = & "$env:GITHUB_WORKSPACE\voice-normal.ps1" install --device cpu --json --lang en | Out-String
+          $result = $out | ConvertFrom-Json
+          $result.smoke | Format-Table name, ok, seconds, detail -AutoSize -Wrap | Out-String -Width 200
+          if (-not $result.ok) { Write-Error "install failed: $($result.error)"; exit 1 }
+          $doctor = & "$env:GITHUB_WORKSPACE\voice-normal.ps1" doctor --json | Out-String | ConvertFrom-Json
+          $models = $doctor.checks | Where-Object id -eq 'models'
+          if ($models.status -ne 'ok') { Write-Error "doctor after install: $($models.message)"; exit 1 }
 
       # Windows PowerShell 5.1 — те, що стоїть у користувачів за замовчуванням.
       - name: PowerShell wrapper (Windows PowerShell 5.1)

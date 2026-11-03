@@ -10,7 +10,7 @@
 | Етап | Що | Стан |
 |---|---|---|
 | 1 | Каркас, `doctor`, обгортки, CI | готово |
-| 2 | `install`: пакети й моделі | — |
+| 2 | `install`: пакети й моделі | готово |
 | 3 | `plan`: аналіз і маршрут | — |
 | 4 | `process`: відновлення і зведення | — |
 | 5 | Перевірка за гейтами, `report.md` | — |
@@ -49,6 +49,19 @@ GPU NVIDIA не обов'язковий: без нього все працює �
    Перший запуск сам поставить потрібний Python (3.12) — це займе хвилину.
    Пункти з `[!!]` треба виправити, `[..]` — це те, що зробить `voice-normal install`.
 
+4. Встановіть ML-пакети й моделі (≈1 ГБ пакетів і ≈1.5 ГБ моделей, один раз):
+
+   ```powershell
+   .\voice-normal install
+   ```
+
+   Пристрій обирається сам: є NVIDIA — CUDA, немає — CPU. Можна задати явно:
+   `--device cpu` або `--device cuda`. Якщо інтернет обірвався, просто запустіть
+   `install` ще раз — завантаження продовжиться з місця зупинки. Кожен файл
+   перевіряється за sha256; `install --verify` перераховує їх усі ще раз.
+   Наприкінці `install` запускає кожну модель на тестовому сигналі й показує,
+   у скільки разів швидше (або повільніше) за реальний час працює відновлення.
+
 Мова повідомлень: `--lang uk` (за замовчуванням), `--lang ru` або `--lang en`,
 або змінна середовища `VOICE_NORMAL_LANG`. Для агентів і скриптів є `--json`.
 
@@ -60,5 +73,17 @@ GPU NVIDIA не обов'язковий: без нього все працює �
 
 ## Ліцензія
 
-MIT — див. [LICENSE](LICENSE). Сторонні моделі мають власні ліцензії, їх буде
-перелічено тут після етапу 2.
+Код — MIT, див. [LICENSE](LICENSE). Моделі завантажуються з їхніх джерел і мають
+власні ліцензії:
+
+| Модель | Для чого | Ліцензія | Джерело |
+|---|---|---|---|
+| Sidon v0.1 (Nakata, Saito та ін.) | відновлення голосу | MIT | [sarulab-speech/sidon-v0.1](https://huggingface.co/sarulab-speech/sidon-v0.1) |
+| w2v-BERT 2.0 (Meta) — конфіг препроцесора | вхід Sidon | MIT | [facebook/w2v-bert-2.0](https://huggingface.co/facebook/w2v-bert-2.0) |
+| DNSMOS P.835 (Microsoft) | оцінка якості SIG/BAK/OVRL | ваги — [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), код — MIT | [microsoft/DNS-Challenge](https://github.com/microsoft/DNS-Challenge/tree/master/DNSMOS) |
+| Whisper small (OpenAI), конвертація faster-whisper (SYSTRAN) | перевірка слів | MIT | [Systran/faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small) |
+| ECAPA-TDNN 512 (WeSpeaker) | перевірка голосу | Apache-2.0 | [Wespeaker/wespeaker-voxceleb-ecapa-tdnn512](https://huggingface.co/Wespeaker/wespeaker-voxceleb-ecapa-tdnn512) |
+
+DNSMOS: C. K. A. Reddy, V. Gopal, R. Cutler, "DNSMOS P.835: A non-intrusive perceptual
+objective speech quality metric to evaluate noise suppressors", ICASSP 2022.
+Модель використовується без змін.

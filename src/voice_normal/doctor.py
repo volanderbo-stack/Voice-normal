@@ -25,7 +25,7 @@ PYTHON_MAX_EXCLUSIVE = (3, 14)
 DISK_NEED_GB = 3
 DISK_WANT_GB = 6
 
-ML_PACKAGES = ("numpy", "soundfile", "torch", "torchaudio", "transformers", "onnxruntime", "faster_whisper")
+ML_PACKAGES = ("numpy", "scipy", "soundfile", "torch", "transformers", "onnxruntime", "faster_whisper")
 
 
 @dataclass
@@ -146,9 +146,31 @@ def check_ml_packages() -> Check:
     return Check("ml_packages", OK, t("doctor.ml.ok", packages=", ".join(ML_PACKAGES)))
 
 
-def check_models() -> Check:
-    # Реєстр моделей з sha256 з'явиться на етапі 2; до того моделей просто немає.
-    return Check("models", PENDING, t("doctor.models.missing"), hints=[t("doctor.next_install")])
+def check_models(device: str) -> Check:
+    from voice_normal import models
+
+    manifest = models.read_manifest()
+    if manifest is None:
+        return Check("models", PENDING, t("doctor.models.missing"), hints=[t("doctor.next_install")])
+    have = manifest.get("device", "cpu")
+    if have != device:
+        return Check(
+            "models",
+            WARN,
+            t("doctor.models.device_mismatch", have=have, want=device),
+            hints=[f"voice-normal install --device {device}"],
+        )
+    missing = models.missing_files(have)
+    if missing:
+        return Check(
+            "models",
+            PENDING,
+            t("doctor.models.partial", count=len(missing)),
+            hints=[t("doctor.next_install")],
+            data={"missing": missing},
+        )
+    size = models.total_size(have) / 1024**3
+    return Check("models", OK, t("doctor.models.ok", device=have, size=size), data={"device": have})
 
 
 def run_checks() -> list[Check]:
@@ -158,7 +180,8 @@ def run_checks() -> list[Check]:
     long_paths = check_long_paths()
     if long_paths is not None:
         checks.append(long_paths)
-    checks += [check_gpu(), check_ml_packages(), check_models()]
+    gpu = check_gpu()
+    checks += [gpu, check_ml_packages(), check_models(str(gpu.data["device"]))]
     return checks
 
 

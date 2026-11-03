@@ -50,7 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("doctor", parents=[common], help=t("cli.doctor"))
-    sub.add_parser("install", parents=[common], help=t("cli.install"))
+    install = sub.add_parser("install", parents=[common], help=t("cli.install"))
+    install.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto", help=t("cli.device"))
+    install.add_argument("--verify", action="store_true", help=t("cli.verify"))
+    install.add_argument("--skip-packages", action="store_true", help=t("cli.skip_packages"))
 
     plan = sub.add_parser("plan", parents=[common], help=t("cli.plan"))
     plan.add_argument("input", type=Path, help=t("cli.input"))
@@ -75,6 +78,32 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return code
 
 
+def cmd_install(args: argparse.Namespace) -> int:
+    from voice_normal import download, install
+
+    # Хід встановлення — у stderr, якщо stdout зайнятий JSON-результатом.
+    stream = sys.stderr if args.json else sys.stdout
+
+    def log(message: str) -> None:
+        print(message, file=stream, flush=True)
+
+    log(t("install.title"))
+    try:
+        result = install.run_install(args.device, args.verify, args.skip_packages, log)
+    except download.ChecksumError as exc:
+        result = install.InstallResult(ok=False, error=t("install.checksum_failed", error=exc))
+    except download.DownloadError as exc:
+        result = install.InstallResult(ok=False, error=t("install.download_failed", error=exc))
+    except RuntimeError as exc:
+        result = install.InstallResult(ok=False, error=str(exc))
+    except KeyboardInterrupt:
+        print(t("install.interrupted"), file=sys.stderr)
+        return EXIT_INTERRUPTED
+    text = t("install.done") if result.ok else (result.error or t("install.smoke.failed"))
+    _emit(install.as_json(result), text, args.json)
+    return EXIT_OK if result.ok else EXIT_FAIL
+
+
 def _not_ready(args: argparse.Namespace, stage: int) -> int:
     if getattr(args, "input", None) is not None and not args.input.exists():
         message = t("cli.input_missing", path=args.input)
@@ -87,7 +116,7 @@ def _not_ready(args: argparse.Namespace, stage: int) -> int:
 
 COMMANDS = {
     "doctor": cmd_doctor,
-    "install": lambda args: _not_ready(args, 2),
+    "install": cmd_install,
     "plan": lambda args: _not_ready(args, 3),
     "process": lambda args: _not_ready(args, 4),
 }
