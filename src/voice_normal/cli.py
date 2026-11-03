@@ -16,7 +16,7 @@ from voice_normal.i18n import t
 EXIT_OK = 0
 EXIT_FAIL = 1
 EXIT_USAGE = 2
-EXIT_NOT_READY = 3
+EXIT_NOT_READY = 3  # ML-пакети ще не встановлено: спершу `voice-normal install`
 EXIT_INTERRUPTED = 130
 
 
@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _emit(payload: dict[str, object] | None, text: str, as_json: bool) -> None:
     if as_json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(console.dumps(payload), end="")
     else:
         print(text)
 
@@ -121,7 +121,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     except ImportError:
         message = t("plan.need_install")
         _emit({"ok": False, "error": message}, message, args.json)
-        return EXIT_FAIL
+        return EXIT_NOT_READY
     try:
         info, analysis = analyze.analyze(args.input)
     except (media.MediaError, OSError) as exc:
@@ -135,21 +135,38 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _not_ready(args: argparse.Namespace, stage: int) -> int:
-    if getattr(args, "input", None) is not None and not args.input.exists():
-        message = t("cli.input_missing", path=args.input)
+def cmd_process(args: argparse.Namespace) -> int:
+    if (code := _check_input(args)) is not None:
+        return code
+    try:
+        from voice_normal import media, process
+    except ImportError:
+        message = t("plan.need_install")
         _emit({"ok": False, "error": message}, message, args.json)
-        return EXIT_USAGE
-    message = t("cli.not_ready", command=args.command, stage=stage)
-    _emit({"ok": False, "error": message}, message, args.json)
-    return EXIT_NOT_READY
+        return EXIT_NOT_READY
+    stream = sys.stderr if args.json else sys.stdout
+
+    def log(message: str) -> None:
+        print(message, file=stream, flush=True)
+
+    try:
+        result = process.run(args.input, args.out, log)
+    except (media.MediaError, OSError) as exc:
+        message = t("plan.media_error", error=exc)
+        _emit({"ok": False, "error": message}, message, args.json)
+        return EXIT_FAIL
+    text = t("process.done", audio=result.outputs.audio) + (
+        "\n" + t("process.done_video", video=result.outputs.video) if result.outputs.video else ""
+    )
+    _emit(result.to_dict(), text, args.json)
+    return EXIT_OK if result.ok else EXIT_FAIL
 
 
 COMMANDS = {
     "doctor": cmd_doctor,
     "install": cmd_install,
     "plan": cmd_plan,
-    "process": lambda args: _not_ready(args, 4),
+    "process": cmd_process,
 }
 
 

@@ -244,10 +244,10 @@ def output_paths(source: Path, out_dir: Path) -> tuple[Path, Path]:
 
 
 def write(plan: Plan, source: Path, out_dir: Path) -> tuple[Path, Path]:
-    from voice_normal.console import write_text
+    from voice_normal.console import dumps, write_text
 
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path, md_path = output_paths(source, out_dir)
-    write_text(json_path, json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n")
+    write_text(json_path, dumps(plan.to_dict()))
     write_text(md_path, render(plan))
     return json_path, md_path
