@@ -9,5 +9,5 @@ if errorlevel 1 (
     exit /b 1
 )
 rem "%~dp0." avoids the trailing backslash that would escape the closing quote.
-uv run --quiet --project "%~dp0." voice-normal %*
+uv run --quiet --no-dev --project "%~dp0." voice-normal %*
 exit /b %ERRORLEVEL%
