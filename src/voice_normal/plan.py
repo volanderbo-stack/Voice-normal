@@ -140,11 +140,12 @@ def read_speed() -> tuple[float, str]:
 
 def estimate(route: str, duration_s: float, probe_s: float, probe_whole: bool) -> dict:
     speed, device = read_speed()
-    # Аналіз і перевірка (розпізнавання мови двічі, голос, DNSMOS) — приблизно чверть тривалості.
-    overhead = 0.25 * duration_s
+    # Заміряно на i5-1135G7: аналіз, тембр і зведення ~0.2 тривалості; перевірка з
+    # розпізнаванням мови двічі ще ~0.55 (без відновлення слова не перевіряються).
     if route == "master_only":
-        seconds = 0.1 * duration_s + overhead
+        seconds = 0.2 * duration_s
     else:
+        overhead = 0.75 * duration_s
         restore = duration_s / speed
         probe = 0.0 if probe_whole else probe_s / speed
         seconds = restore + probe + overhead
