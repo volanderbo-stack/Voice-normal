@@ -181,7 +181,18 @@ def run_install(requested_device: str, verify: bool, skip_packages: bool, log) -
     result.ok = all(item["ok"] for item in result.smoke)
     if not result.ok:
         result.error = t("install.smoke.failed")
+    sidon = next((item for item in result.smoke if item["name"] == "sidon" and item["ok"]), None)
+    if sidon is not None and "realtime_x" in sidon:
+        write_benchmark(device, float(sidon["realtime_x"]))
     return result
+
+
+def write_benchmark(device: str, realtime_x: float) -> None:
+    """Швидкість Sidon на цьому комп'ютері — за нею plan оцінює час обробки."""
+    from voice_normal.console import write_text
+
+    payload = {"device": device, "sidon_realtime_x": realtime_x}
+    write_text(models.benchmark_path(), json.dumps(payload) + "\n")
 
 
 def as_json(result: InstallResult) -> dict[str, object]:

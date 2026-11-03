@@ -59,7 +59,7 @@ def test_missing_input_is_usage_error(capsys, tmp_path):
 def test_unfinished_commands_say_so(capsys, tmp_path):
     source = tmp_path / "запис камера.wav"
     source.write_bytes(b"")
-    code, _ = _run_json(capsys, "plan", str(source))
+    code, _ = _run_json(capsys, "process", str(source))
     assert code == cli.EXIT_NOT_READY
 
 

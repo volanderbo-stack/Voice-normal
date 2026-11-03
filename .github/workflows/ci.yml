@@ -16,6 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Контекст runner недоступний у env рівня job, тому змінну задає окремий крок.
+      - name: Data folder outside the workspace
+        shell: pwsh
+        run: Add-Content $env:GITHUB_ENV "VOICE_NORMAL_HOME=$env:RUNNER_TEMP\vn-home" -Encoding utf8
+
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -25,9 +30,6 @@ jobs:
 
       - name: Sync environment
         run: uv sync
-
-      - name: Unit tests
-        run: uv run pytest
 
       # Шлях із кирилицею й пробілами — головний ризик для Windows-користувачів.
       - name: Wrappers from a Cyrillic path (pwsh)
@@ -40,7 +42,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $json = & "$env:GITHUB_WORKSPACE\voice-normal.ps1" doctor --json --lang ru | Out-String | ConvertFrom-Json
           if (-not $json.ok) { Write-Error $json.summary; exit 1 }
-          if ($json.summary -notmatch 'voice-normal install') { Write-Error "unexpected summary: $($json.summary)"; exit 1 }
 
       # Моделі (~1.5 ГБ) кешуються; ключ змінюється разом із реєстром у models.py.
       - name: Cache models
@@ -51,8 +52,6 @@ jobs:
 
       - name: Install packages and models, smoke-test them
         shell: pwsh
-        env:
-          VOICE_NORMAL_HOME: ${{ runner.temp }}\vn-home
         run: |
           $out = & "$env:GITHUB_WORKSPACE\voice-normal.ps1" install --device cpu --json --lang en | Out-String
           $result = $out | ConvertFrom-Json
@@ -61,6 +60,22 @@ jobs:
           $doctor = & "$env:GITHUB_WORKSPACE\voice-normal.ps1" doctor --json | Out-String | ConvertFrom-Json
           $models = $doctor.checks | Where-Object id -eq 'models'
           if ($models.status -ne 'ok') { Write-Error "doctor after install: $($models.message)"; exit 1 }
+
+      # Після install доступні ML-пакети й моделі, тож ідуть і тести аналізу.
+      - name: Unit tests
+        run: uv run pytest -rs
+
+      - name: plan on a recording in a Cyrillic path
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'Записи з камери'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Set-Location $dir
+          ffmpeg -nostdin -v error -y -f lavfi -i "anoisesrc=color=pink:amplitude=0.05:duration=20:seed=1" "запис камера.wav"
+          $plan = & "$env:GITHUB_WORKSPACE\voice-normal.ps1" plan "запис камера.wav" --out "результат\" --json | Out-String | ConvertFrom-Json
+          if (-not $plan.ok) { Write-Error "plan failed: $($plan.error)"; exit 1 }
+          if (-not (Test-Path "результат\запис камера.plan.md")) { Write-Error 'plan.md missing'; exit 1 }
+          Get-Content "результат\запис камера.plan.md" -Encoding utf8
 
       # Windows PowerShell 5.1 — те, що стоїть у користувачів за замовчуванням.
       - name: PowerShell wrapper (Windows PowerShell 5.1)

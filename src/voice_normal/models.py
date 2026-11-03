@@ -132,6 +132,10 @@ def manifest_path(root: Path | None = None) -> Path:
     return (root or paths.models_dir()) / MANIFEST_NAME
 
 
+def benchmark_path(root: Path | None = None) -> Path:
+    return (root or paths.models_dir()) / "benchmark.json"
+
+
 def read_manifest(root: Path | None = None) -> dict | None:
     path = manifest_path(root)
     try:

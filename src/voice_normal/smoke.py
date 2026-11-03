@@ -15,7 +15,10 @@ def _check(name, fn):
     started = time.perf_counter()
     try:
         detail = fn()
-        return {"name": name, "ok": True, "detail": detail, "seconds": round(time.perf_counter() - started, 2)}
+        extra = {}
+        if isinstance(detail, tuple):
+            detail, extra = detail
+        return {"name": name, "ok": True, "detail": detail, "seconds": round(time.perf_counter() - started, 2), **extra}
     except Exception as exc:  # noqa: BLE001 — будь-яка помилка тут означає "не працює"
         last = traceback.format_exception_only(type(exc), exc)[-1].strip()
         return {"name": name, "ok": False, "detail": last, "seconds": round(time.perf_counter() - started, 2)}
@@ -88,7 +91,8 @@ def check_sidon(device):
     ratio = out.size / wav.size
     if abs(ratio - OUTPUT_SR / INPUT_SR) > 0.1:
         raise RuntimeError(f"unexpected output length {out.size} for {wav.size} samples")
-    return f"load {load:.1f} s, {seconds:.0f} s audio in {elapsed:.1f} s (x{seconds / elapsed:.2f} realtime), out/in={ratio:.4f}"
+    detail = f"load {load:.1f} s, {seconds:.0f} s audio in {elapsed:.1f} s (x{seconds / elapsed:.2f} realtime), out/in={ratio:.4f}"
+    return detail, {"realtime_x": round(seconds / elapsed, 3)}
 
 
 def main(argv: list[str]) -> int:
