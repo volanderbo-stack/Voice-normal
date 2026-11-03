@@ -1,4 +1,9 @@
-"""voice-normal process: проба -> відновлення -> вирівнювання -> тембр -> зведення -> файли."""
+"""voice-normal process: проба -> відновлення -> тембр -> зведення -> перевірка -> ремонт -> файли.
+
+Після кожного зведення результат проходить гейти (verify.py). Якщо щось не так, до трьох
+раундів ремонту: переробити окремі фрагменти з ширшим контекстом, перенести шов в іншу
+паузу, звести ще раз, а якщо й це не допомогло — лишити тільки зведення без відновлення.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import resample_poly
 
-from voice_normal import align, analyze, loudness, media, models, paths, restore, timbre, tools
+from voice_normal import align, analyze, loudness, media, models, report, restore, timbre, tools, verify
 from voice_normal import plan as planner
 from voice_normal.console import dumps, write_text
 from voice_normal.i18n import t
@@ -19,6 +24,9 @@ from voice_normal.paths import long_path
 
 SR48 = 48_000
 PROBE_MIN_GAIN = 0.1  # наскільки OVRL проби має вирости, щоб відновлення мало сенс
+MAX_REPAIR_ROUNDS = 3
+REPAIR_MARGINS_S = (3.0, 5.0)  # контекст фрагмента в 1-му і 2-му раундах ремонту
+REMASTER_STEP_DB = 0.3
 
 
 @dataclass
@@ -27,6 +35,7 @@ class Outputs:
     video: str | None = None
     plan: str | None = None
     summary: str | None = None
+    report: str | None = None
 
 
 @dataclass
@@ -43,6 +52,9 @@ class ProcessResult:
     seconds: dict = field(default_factory=dict)
     outputs: Outputs | None = None
     notes: list[str] = field(default_factory=list)
+    verdict: str = verify.FAIL
+    gates: list[dict] = field(default_factory=list)
+    rounds: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,7 +65,8 @@ def output_names(source: Path, out_dir: Path) -> dict[str, Path]:
     return {
         "audio": out_dir / f"{stem}.cleaned.wav",
         "video": out_dir / f"{stem}.cleaned{source.suffix.lower()}",
-        "summary": out_dir / f"{stem}.process.json",
+        "summary": out_dir / f"{stem}.report.json",
+        "report": out_dir / f"{stem}.report.md",
     }
 
 
@@ -157,7 +170,43 @@ def device() -> str:
     return (models.read_manifest() or {}).get("device", "cpu")
 
 
-def run(source: Path, out_dir: Path, log, force_route: str | None = None, chunk_s: float | None = None) -> ProcessResult:
+def _chunk_dicts(chunks: list[restore.Chunk]) -> list[dict]:
+    return [c.to_dict() for c in chunks]
+
+
+def plan_repair(gates: list[verify.Gate], route: str, round_index: int) -> list[str]:
+    """Що робити з гейтами, які не пройшли: перелік дій для наступного раунду."""
+    bad = {g.id: g for g in verify.failing(gates)}
+    if set(bad) <= {"loudness"}:
+        return ["remaster"]
+    if route != "restore":
+        # Лише підсилення: крім гучності, обробка тут нічого не могла зламати — ремонтувати нічого.
+        return ["remaster"] if "loudness" in bad else []
+    quality = bad.get("quality")
+    globally_worse = quality is not None and quality.values["ovrl_after"] < quality.values["ovrl_before"] - verify.QUALITY_MAX_DROP
+    if globally_worse or "echo" in bad or "length" in bad or round_index >= MAX_REPAIR_ROUNDS - 1:
+        return ["master_only"]
+    actions = []
+    sync = bad.get("sync")
+    if sync is not None and abs(sync.values["offset_ms"]) > verify.SYNC_MAX_MS:
+        actions.append("resync")
+    if "seams" in bad:
+        actions.append("recut")
+    if any(g.chunks for k, g in bad.items() if k not in ("seams", "loudness")) or "words" in bad or "voice" in bad:
+        actions.append("redo")
+    if "loudness" in bad:
+        actions.append("remaster")
+    return actions or ["master_only"]
+
+
+def run(
+    source: Path,
+    out_dir: Path,
+    log,
+    force_route: str | None = None,
+    chunk_s: float | None = None,
+    verifier: verify.Verifier | None = None,
+) -> ProcessResult:
     started = time.perf_counter()
     out_dir.mkdir(parents=True, exist_ok=True)
     info, plan, plan_path = load_or_make_plan(source, out_dir, log)
@@ -168,12 +217,13 @@ def run(source: Path, out_dir: Path, log, force_route: str | None = None, chunk_
               "output_samples": int(x48.size), "output_rate": SR48}
     route = force_route or plan.route
     result = ProcessResult(ok=False, route=route, input=asdict(info), length=length)
+    speech = speech_mask_48k(x48)
+    model = None
 
     if route == "restore":
         from voice_normal.sidon import Sidon
 
         t0 = time.perf_counter()
-        speech = speech_mask_48k(x48)
         log(t("process.loading_model", device=device().upper()))
         model = Sidon(device())
         timings["load_model"] = round(time.perf_counter() - t0, 1)
@@ -188,45 +238,99 @@ def run(source: Path, out_dir: Path, log, force_route: str | None = None, chunk_
                 result.notes.append("probe_not_better")
                 log(t("process.probe_fallback"))
 
+    def progress(done: int, total: int, seconds: float) -> None:
+        log(t("process.chunk", done=done, total=total, seconds=seconds))
+
+    chunks: list[restore.Chunk] = []
+    restored = restorer = None
     if route == "restore":
         t0 = time.perf_counter()
-        chunks = restore.plan_chunks(x48.size // 3, speech, chunk_s or restore.CHUNK_S)
+        restorer = restore.Restorer(x48, model)
+        chunks = restore.plan_chunks(restorer.x16.size, speech, chunk_s or restore.CHUNK_S)
         log(t("process.restoring", count=len(chunks)))
-
-        def progress(done: int, total: int, seconds: float) -> None:
-            log(t("process.chunk", done=done, total=total, seconds=seconds))
-
-        restored, chunks = restore.restore(x48, speech, model, chunks, progress)
+        restored = restorer.render(chunks, progress=progress)
         timings["restore"] = round(time.perf_counter() - t0, 1)
-        result.chunks = [c.to_dict() for c in chunks]
-
-        t0 = time.perf_counter()
-        restored, result.timbre = timbre.match(restored, x48, speech, plan.analysis["bandwidth_hz"])
-        timings["timbre"] = round(time.perf_counter() - t0, 1)
-        signal = restored
-    else:
-        signal = x48
-
-    # Довжина виходу дорівнює довжині входу в семплах 48 кГц — завжди, за будь-якого маршруту.
-    signal = align.fit_length(signal, x48.size)
-    sync = align.measure(signal, x48)
-    result.sync = {"offset_ms": round(sync.ms, 3), "correlation": round(sync.correlation, 3)}
-
-    t0 = time.perf_counter()
-    log(t("process.mastering"))
-    mastered, result.mastering = loudness.master(signal, planner.TARGET_LUFS, planner.TARGET_TRUE_PEAK)
-    timings["mastering"] = round(time.perf_counter() - t0, 1)
 
     names = output_names(source, out_dir)
-    write_wav(names["audio"], mastered)
-    outputs = Outputs(audio=str(names["audio"]), plan=str(plan_path), summary=str(names["summary"]))
+    verifier = verifier or verify.Verifier(device())
+    reference = verifier.reference(x48, speech)
+    ceiling = planner.TARGET_TRUE_PEAK
+    actions: list[str] = ["initial"]
+    timings["verify"] = 0.0
+
+    for round_index in range(MAX_REPAIR_ROUNDS + 1):
+        if route == "restore":
+            signal, result.timbre = timbre.match(restored, x48, speech, plan.analysis["bandwidth_hz"])
+        else:
+            signal, result.timbre, chunks = x48, {}, []
+        # Довжина виходу дорівнює довжині входу в семплах 48 кГц — завжди, за будь-якого маршруту.
+        signal = align.fit_length(signal, x48.size)
+        sync = align.measure(signal, x48)
+        result.sync = {"offset_ms": round(sync.ms, 3), "correlation": round(sync.correlation, 3)}
+
+        log(t("process.mastering"))
+        mastered, result.mastering = loudness.master(signal, planner.TARGET_LUFS, ceiling)
+        write_wav(names["audio"], mastered)
+
+        log(t("process.verifying"))
+        t0 = time.perf_counter()
+        gates = verifier.check(
+            reference, mastered, audio_path=names["audio"], chunks=_chunk_dicts(chunks),
+            content_changed=route == "restore",
+            target_lufs=planner.TARGET_LUFS, ceiling_dbtp=planner.TARGET_TRUE_PEAK,
+        )
+        timings["verify"] = round(timings["verify"] + time.perf_counter() - t0, 1)
+        for gate in gates:
+            log(t("process.gate", mark=report.MARK[gate.status], gate=t(f"gate.{gate.id}")))
+        result.rounds.append({"round": round_index, "route": route, "actions": actions,
+                              "gates": {g.id: g.status for g in gates}})
+        if not verify.failing(gates) or round_index == MAX_REPAIR_ROUNDS:
+            break
+        actions = plan_repair(gates, route, round_index)
+        if not actions:
+            break
+        log(t("process.repair", round=round_index + 1, actions=", ".join(t(f"repair.{a}") for a in actions)))
+        t0 = time.perf_counter()
+        bad = {g.id: g for g in verify.failing(gates)}
+        if "master_only" in actions:
+            route = result.route = "master_only"
+            result.notes.append("restore_rejected")
+            continue
+        if "remaster" in actions:
+            ceiling -= REMASTER_STEP_DB
+        if "resync" in actions:
+            restored = align.shift(restored, int(round(bad["sync"].values["offset_ms"] * SR48 / 1000)))
+        redo: set[int] = set()
+        if "recut" in actions:
+            for seam in (d["seam"] for d in bad["seams"].details if d["status"] == verify.FAIL):
+                moved = restore.recut(chunks, seam, speech)
+                if moved is not None:
+                    chunks = moved
+                redo.update({seam - 1, seam})
+        if "redo" in actions:
+            for gate in bad.values():
+                if gate.id not in ("seams", "loudness", "sync") or gate.chunks:
+                    redo.update(gate.chunks or range(len(chunks)))
+        if redo:
+            margin = REPAIR_MARGINS_S[min(round_index, len(REPAIR_MARGINS_S) - 1)]
+            restored = restorer.redo(restored, chunks, sorted(redo), margin, progress)
+        timings[f"repair_{round_index + 1}"] = round(time.perf_counter() - t0, 1)
+
+    result.chunks = _chunk_dicts(chunks)
+    outputs = Outputs(audio=str(names["audio"]), plan=str(plan_path), summary=str(names["summary"]),
+                      report=str(names["report"]))
     if info.has_video:
         log(t("process.muxing"))
         mux_video(source, names["audio"], names["video"])
         outputs.video = str(names["video"])
+        gates = [verifier.length(reference, mastered, names["audio"], (source, names["video"])) if g.id == "length" else g
+                 for g in gates]
     result.outputs = outputs
+    result.gates = [g.to_dict() for g in gates]
+    result.verdict = verify.worst(gates)
+    result.ok = result.verdict != verify.FAIL
     timings["total"] = round(time.perf_counter() - started, 1)
     result.seconds = timings
-    result.ok = True
     write_text(names["summary"], dumps(result.to_dict()))
+    write_text(names["report"], report.render(result.to_dict()))
     return result

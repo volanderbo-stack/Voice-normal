@@ -155,9 +155,11 @@ def cmd_process(args: argparse.Namespace) -> int:
         message = t("plan.media_error", error=exc)
         _emit({"ok": False, "error": message}, message, args.json)
         return EXIT_FAIL
-    text = t("process.done", audio=result.outputs.audio) + (
-        "\n" + t("process.done_video", video=result.outputs.video) if result.outputs.video else ""
-    )
+    lines = [t(f"process.done.{result.verdict}"), t("process.done", audio=result.outputs.audio)]
+    if result.outputs.video:
+        lines.append(t("process.done_video", video=result.outputs.video))
+    lines.append(t("process.report", report=result.outputs.report))
+    text = "\n".join(lines)
     _emit(result.to_dict(), text, args.json)
     return EXIT_OK if result.ok else EXIT_FAIL
 
