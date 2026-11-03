@@ -1,0 +1,18 @@
+# Текст зберігаємо з LF, щоб CRLF не псував скрипти й фікстури.
+* text=auto eol=lf
+
+# Windows-скрипти — з CRLF: cmd.exe погано читає .cmd з LF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Аудіо, відео й моделі — бінарні, без жодних перетворень.
+*.wav    binary
+*.flac   binary
+*.mp3    binary
+*.m4a    binary
+*.mp4    binary
+*.mov    binary
+*.onnx   binary
+*.pt     binary
+*.bin    binary
