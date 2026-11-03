@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install ffmpeg
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Sync environment
+        run: uv sync
+
+      - name: Unit tests
+        run: uv run pytest
+
+      # Шлях із кирилицею й пробілами — головний ризик для Windows-користувачів.
+      - name: Wrappers from a Cyrillic path (pwsh)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'Тест папка з пробілами'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Set-Location $dir
+          & "$env:GITHUB_WORKSPACE\voice-normal.cmd" doctor
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $json = & "$env:GITHUB_WORKSPACE\voice-normal.ps1" doctor --json --lang ru | Out-String | ConvertFrom-Json
+          if (-not $json.ok) { Write-Error $json.summary; exit 1 }
+          if ($json.summary -notmatch 'voice-normal install') { Write-Error "unexpected summary: $($json.summary)"; exit 1 }
+
+      # Windows PowerShell 5.1 — те, що стоїть у користувачів за замовчуванням.
+      - name: PowerShell wrapper (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\voice-normal.ps1" doctor --lang en
+          exit $LASTEXITCODE

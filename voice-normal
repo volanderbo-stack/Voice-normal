@@ -1,0 +1,9 @@
+#!/bin/sh
+# voice-normal for macOS/Linux. All logic lives in the Python package; this only starts it.
+set -e
+if ! command -v uv >/dev/null 2>&1; then
+    echo "[voice-normal] uv not found in PATH: https://docs.astral.sh/uv/" >&2
+    exit 1
+fi
+here=$(cd "$(dirname "$0")" && pwd)
+exec uv run --quiet --project "$here" voice-normal "$@"
