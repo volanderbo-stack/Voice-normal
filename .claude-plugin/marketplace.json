@@ -1,0 +1,14 @@
+{
+  "name": "voice-normal",
+  "description": "voice-normal: local voice restoration for speech recordings",
+  "owner": {
+    "name": "volanderbo-stack"
+  },
+  "plugins": [
+    {
+      "name": "voice-normal",
+      "source": "./",
+      "description": "Clean, podcast-quality voice from camera, laptop and phone recordings, fully local, with checks that words, voice and sync are unchanged."
+    }
+  ]
+}
