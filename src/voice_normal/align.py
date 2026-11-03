@@ -28,6 +28,10 @@ class Offset:
 
 
 def flux(x: np.ndarray) -> np.ndarray:
+    # Нормуємо за RMS: логарифм нижче залежить від рівня, і без цього той самий звук до
+    # й після зведення (+10 дБ) давав би трохи різні оцінки зсуву.
+    rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))) if x.size else 0.0
+    x = x / rms * 0.1 if rms > 0 else x
     _, _, spec = stft(x.astype(np.float32), fs=SR, nperseg=NPERSEG, noverlap=NPERSEG - HOP, boundary=None, padded=False)
     log = np.log1p(np.abs(spec) * 100.0)
     rise = np.maximum(np.diff(log, axis=1), 0.0).sum(axis=0)

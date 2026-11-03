@@ -212,8 +212,8 @@ def _highpass(x: np.ndarray) -> np.ndarray:
 
 
 def click_score(y48: np.ndarray, at: int, half_ms: float = 10.0) -> tuple[float, float]:
-    """Наскільки 1-мс кадр вище 4 кГц біля семпла at гучніший за сусідні кадри (дБ),
-    і рівень цього кадру (дБFS).
+    """Наскільки пік 1-мс кадру вище 4 кГц біля семпла at перевищує піки сусідніх кадрів (дБ),
+    і рівень цього піку (дБFS).
 
     Клацання — короткий широкосмуговий імпульс, ізольований у часі. Шиплячі теж мають
     багато високих частот, але тягнуться десятки мілісекунд, тож відносно сусідів
@@ -225,7 +225,9 @@ def click_score(y48: np.ndarray, at: int, half_ms: float = 10.0) -> tuple[float,
     n = hp.size // CLICK_FRAME
     if n < 30:
         return 0.0, -200.0
-    energy = np.mean(hp[: n * CLICK_FRAME].reshape(n, CLICK_FRAME) ** 2, axis=1)
+    # Пік, а не середнє по кадру: енергія імпульсу зосереджена в кількох семплах і в
+    # середньому по 48 семплах розчинилася б у шумі.
+    energy = np.max(hp[: n * CLICK_FRAME].reshape(n, CLICK_FRAME) ** 2, axis=1)
     k0 = (at - lo) // CLICK_FRAME
     h = max(1, int(half_ms * SR48 / 1000) // CLICK_FRAME)
     best, level = -200.0, -200.0

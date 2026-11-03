@@ -38,36 +38,47 @@ def ffmpeg(*args: str) -> None:
     subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", *args], check=True)
 
 
-@pytest.fixture(scope="session")
-def speech_wav(media_dir):
-    """Справжня мова від вбудованого синтезатора Windows; без нього тести пропускаються."""
+SPEECH_TEXT = (
+    "Good afternoon. This is a short test recording for the voice processing tool. "
+    "I speak at a normal pace and pause between sentences, so there is silence in between. "
+    "Imagine a video recorded in a room with bare walls and a laptop fan in the background. "
+    "The words are clear, but the sound is tiring to listen to for a long time. "
+    "The tool keeps the voice, removes everything else, and makes the speech sound close and even."
+)
+
+
+def tts(out: Path, text: str = SPEECH_TEXT, voice: str = "*") -> Path:
+    """Мова від вбудованого синтезатора Windows (System.Speech), 48 кГц моно.
+
+    voice — шаблон імені англійського голосу, наприклад "*David*"; без потрібного
+    голосу чи без Windows тест пропускається.
+    """
     if sys.platform != "win32" or shutil.which("ffmpeg") is None:
         pytest.skip("потрібні Windows (System.Speech) і ffmpeg")
-    out = media_dir / "мова чиста.wav"
-    text = (
-        "Good afternoon. This is a short test recording for the voice processing tool. "
-        "I speak at a normal pace and pause between sentences, so there is silence in between. "
-        "Imagine a video recorded in a room with bare walls and a laptop fan in the background. "
-        "The words are clear, but the sound is tiring to listen to for a long time. "
-        "The tool keeps the voice, removes everything else, and makes the speech sound close and even."
-    )
     script = (
         "Add-Type -AssemblyName System.Speech;"
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-        "$v = $s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'en-*' } | Select-Object -First 1;"
+        "$v = $s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'en-*' -and "
+        "$_.VoiceInfo.Name -like $env:VN_TTS_VOICE } | Select-Object -First 1;"
         "if (-not $v) { exit 3 };"
         "$s.SelectVoice($v.VoiceInfo.Name);"
         "$f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo 48000,"
         "([System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen),([System.Speech.AudioFormat.AudioChannel]::Mono);"
         "$s.SetOutputToWaveFile($env:VN_TTS_OUT, $f); $s.Speak($env:VN_TTS_TEXT); $s.Dispose()"
     )
-    env = {**os.environ, "VN_TTS_OUT": str(out), "VN_TTS_TEXT": text}
+    env = {**os.environ, "VN_TTS_OUT": str(out), "VN_TTS_TEXT": text, "VN_TTS_VOICE": voice}
     result = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script], env=env, capture_output=True, check=False
     )
     if result.returncode != 0 or not out.exists():
-        pytest.skip("немає англійського голосу System.Speech")
+        pytest.skip(f"немає англійського голосу System.Speech ({voice})")
     return out
+
+
+@pytest.fixture(scope="session")
+def speech_wav(media_dir):
+    """Справжня мова від вбудованого синтезатора Windows; без нього тести пропускаються."""
+    return tts(media_dir / "мова чиста.wav")
 
 
 @pytest.fixture(scope="session")

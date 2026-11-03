@@ -77,6 +77,22 @@ jobs:
           if (-not (Test-Path "результат\запис камера.plan.md")) { Write-Error 'plan.md missing'; exit 1 }
           Get-Content "результат\запис камера.plan.md" -Encoding utf8
 
+      # Повний шлях користувача: відео з шумом у папці з кирилицею -> process -> звіт.
+      - name: process a demo video in a Cyrillic path
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'Демо запис з камери'
+          & "$env:GITHUB_WORKSPACE\scripts\make-sample.ps1" -Out $dir -Video
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Location $dir
+          $out = & "$env:GITHUB_WORKSPACE\voice-normal.cmd" process 'camera-sample.mp4' --out 'очищено\' --json | Out-String
+          $code = $LASTEXITCODE
+          Get-Content 'очищено\camera-sample.report.md' -Encoding utf8
+          if ($code -ne 0) { Write-Error "process exit code $code"; exit 1 }
+          $result = $out | ConvertFrom-Json
+          if ($result.verdict -eq 'fail') { Write-Error 'a gate failed'; exit 1 }
+          if (-not (Test-Path 'очищено\camera-sample.cleaned.mp4')) { Write-Error 'cleaned video missing'; exit 1 }
+
       # Windows PowerShell 5.1 — те, що стоїть у користувачів за замовчуванням.
       - name: PowerShell wrapper (Windows PowerShell 5.1)
         shell: powershell
