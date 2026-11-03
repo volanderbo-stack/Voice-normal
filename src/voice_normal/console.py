@@ -22,6 +22,19 @@ def setup_streams() -> None:
                 pass
 
 
+def _json_default(value):
+    # numpy-скаляри й масиви (float32, int64, ndarray) -> звичайні типи Python.
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
+def dumps(data) -> str:
+    import json
+
+    return json.dumps(data, ensure_ascii=False, indent=2, default=_json_default) + "\n"
+
+
 def write_text(path, text: str) -> None:
     """Звіти завжди в UTF-8 з LF — однаково на всіх ОС."""
     from voice_normal.paths import long_path

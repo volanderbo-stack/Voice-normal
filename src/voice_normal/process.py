@@ -1,0 +1,232 @@
+"""voice-normal process: проба -> відновлення -> вирівнювання -> тембр -> зведення -> файли."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+import numpy as np
+from scipy.signal import resample_poly
+
+from voice_normal import align, analyze, loudness, media, models, paths, restore, timbre, tools
+from voice_normal import plan as planner
+from voice_normal.console import dumps, write_text
+from voice_normal.i18n import t
+from voice_normal.paths import long_path
+
+SR48 = 48_000
+PROBE_MIN_GAIN = 0.1  # наскільки OVRL проби має вирости, щоб відновлення мало сенс
+
+
+@dataclass
+class Outputs:
+    audio: str
+    video: str | None = None
+    plan: str | None = None
+    summary: str | None = None
+
+
+@dataclass
+class ProcessResult:
+    ok: bool
+    route: str
+    input: dict
+    length: dict
+    probe: dict = field(default_factory=dict)
+    chunks: list[dict] = field(default_factory=list)
+    sync: dict = field(default_factory=dict)
+    timbre: dict = field(default_factory=dict)
+    mastering: dict = field(default_factory=dict)
+    seconds: dict = field(default_factory=dict)
+    outputs: Outputs | None = None
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def output_names(source: Path, out_dir: Path) -> dict[str, Path]:
+    stem = source.stem
+    return {
+        "audio": out_dir / f"{stem}.cleaned.wav",
+        "video": out_dir / f"{stem}.cleaned{source.suffix.lower()}",
+        "summary": out_dir / f"{stem}.process.json",
+    }
+
+
+def load_or_make_plan(source: Path, out_dir: Path, log) -> tuple[media.MediaInfo, planner.Plan, Path]:
+    json_path, _ = planner.output_paths(source, out_dir)
+    info = media.probe(source)
+    try:
+        with open(long_path(json_path), encoding="utf-8") as fh:
+            data = json.load(fh)
+        same = data["input"]["size_bytes"] == info.size_bytes and abs(data["input"]["duration_s"] - info.duration_s) < 1e-3
+        if same and data.get("version") == planner.PLAN_VERSION:
+            log(t("process.plan_reused", path=json_path))
+            return info, _plan_from_dict(data), json_path
+    except (OSError, ValueError, KeyError):
+        pass
+    log(t("process.analyzing"))
+    info, analysis = analyze.analyze(source)
+    plan = planner.build_plan(info, analysis)
+    json_path, _ = planner.write(plan, source, out_dir)
+    return info, plan, json_path
+
+
+def _plan_from_dict(data: dict) -> planner.Plan:
+    fields = dict(data)
+    fields["reasons"] = [planner.Reason(**r) for r in data["reasons"]]
+    fields["warnings"] = [planner.Reason(**r) for r in data["warnings"]]
+    fields["probe"] = [tuple(p) for p in data["probe"]]
+    return planner.Plan(**fields)
+
+
+def read_mono_48k(source: Path, info: media.MediaInfo, strategy: str) -> tuple[np.ndarray, int]:
+    """Моно 48 кГц і точна кількість семплів входу в його рідній частоті."""
+    audio = media.decode(source)
+    native = audio.shape[0]
+    if strategy.startswith("channel"):
+        mono = audio[:, int(strategy.removeprefix("channel")) - 1]
+    elif audio.shape[1] > 1:
+        mono = audio.mean(axis=1)
+    else:
+        mono = audio[:, 0]
+    mono = np.ascontiguousarray(mono, dtype=np.float64)
+    if info.sample_rate == SR48:
+        return mono.astype(np.float32), native
+    # scipy, а не ffmpeg: однаковий результат на будь-якій ОС і версії ffmpeg.
+    g = np.gcd(SR48, info.sample_rate)
+    return resample_poly(mono, SR48 // g, info.sample_rate // g).astype(np.float32), native
+
+
+def speech_mask_48k(x48: np.ndarray) -> np.ndarray:
+    x16 = resample_poly(x48.astype(np.float64), 1, 3).astype(np.float32)
+    return analyze.speech_mask(x16, x16.size // analyze.HOP)
+
+
+def _mean_ovrl(x48: np.ndarray) -> float | None:
+    x16 = resample_poly(x48.astype(np.float64), 1, 3).astype(np.float32)
+    scores = analyze.dnsmos(x16)
+    return float(np.mean([s[3] for s in scores])) if scores else None
+
+
+def run_probe(x48: np.ndarray, speech: np.ndarray, segments, model, log) -> dict:
+    originals, restored = [], []
+    for start_s, end_s in segments:
+        a, b = int(start_s * SR48), min(int(end_s * SR48), x48.size)
+        fa, fb = a // restore.FRAME16 // 3, b // restore.FRAME16 // 3
+        part, _ = restore.restore(x48[a:b], speech[fa:fb], model)
+        originals.append(x48[a:b])
+        restored.append(part)
+    before = _mean_ovrl(np.concatenate(originals))
+    after = _mean_ovrl(np.concatenate(restored))
+    log(t("process.probe_result", before=before or 0, after=after or 0))
+    better = before is None or after is None or after >= before + PROBE_MIN_GAIN
+    return {"segments": [list(s) for s in segments], "ovrl_before": before, "ovrl_after": after, "better": better}
+
+
+def write_wav(path: Path, data: np.ndarray) -> None:
+    import soundfile as sf
+
+    tmp = path.with_name(path.stem + ".part.wav")
+    sf.write(long_path(tmp), np.clip(data, -1.0, 1.0), SR48, subtype="PCM_24")
+    # Файл закрито всередині sf.write; лише тепер Windows дасть його перейменувати.
+    os.replace(long_path(tmp), long_path(path))
+
+
+def mux_video(video: Path, wav: Path, target: Path) -> None:
+    ffmpeg = tools.find_tool("ffmpeg")
+    codec = ["-c:a", "libopus", "-b:a", "192k"] if target.suffix.lower() == ".webm" else ["-c:a", "aac", "-b:a", "256k"]
+    tmp = target.with_name(target.stem + ".part" + target.suffix)
+    result = tools.run_tool(
+        [ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(video), "-i", str(wav),
+         "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", *codec, "-movflags", "+faststart", str(tmp)],
+        timeout=None,
+    )
+    if result.returncode != 0:
+        if os.path.exists(long_path(tmp)):
+            os.remove(long_path(tmp))
+        raise media.MediaError(result.stderr.strip()[-500:])
+    os.replace(long_path(tmp), long_path(target))
+
+
+def device() -> str:
+    return (models.read_manifest() or {}).get("device", "cpu")
+
+
+def run(source: Path, out_dir: Path, log, force_route: str | None = None, chunk_s: float | None = None) -> ProcessResult:
+    started = time.perf_counter()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    info, plan, plan_path = load_or_make_plan(source, out_dir, log)
+    timings: dict[str, float] = {}
+
+    x48, native_samples = read_mono_48k(source, info, plan.analysis["channel_strategy"])
+    length = {"input_samples": native_samples, "input_rate": info.sample_rate,
+              "output_samples": int(x48.size), "output_rate": SR48}
+    route = force_route or plan.route
+    result = ProcessResult(ok=False, route=route, input=asdict(info), length=length)
+
+    if route == "restore":
+        from voice_normal.sidon import Sidon
+
+        t0 = time.perf_counter()
+        speech = speech_mask_48k(x48)
+        log(t("process.loading_model", device=device().upper()))
+        model = Sidon(device())
+        timings["load_model"] = round(time.perf_counter() - t0, 1)
+
+        if not plan.probe_whole_file and force_route is None:
+            log(t("process.probe", seconds=round(sum(e - s for s, e in plan.probe))))
+            t0 = time.perf_counter()
+            result.probe = run_probe(x48, speech, plan.probe, model, log)
+            timings["probe"] = round(time.perf_counter() - t0, 1)
+            if not result.probe["better"]:
+                route = result.route = "master_only"
+                result.notes.append("probe_not_better")
+                log(t("process.probe_fallback"))
+
+    if route == "restore":
+        t0 = time.perf_counter()
+        chunks = restore.plan_chunks(x48.size // 3, speech, chunk_s or restore.CHUNK_S)
+        log(t("process.restoring", count=len(chunks)))
+
+        def progress(done: int, total: int, seconds: float) -> None:
+            log(t("process.chunk", done=done, total=total, seconds=seconds))
+
+        restored, chunks = restore.restore(x48, speech, model, chunks, progress)
+        timings["restore"] = round(time.perf_counter() - t0, 1)
+        result.chunks = [c.to_dict() for c in chunks]
+
+        t0 = time.perf_counter()
+        restored, result.timbre = timbre.match(restored, x48, speech, plan.analysis["bandwidth_hz"])
+        timings["timbre"] = round(time.perf_counter() - t0, 1)
+        signal = restored
+    else:
+        signal = x48
+
+    # Довжина виходу дорівнює довжині входу в семплах 48 кГц — завжди, за будь-якого маршруту.
+    signal = align.fit_length(signal, x48.size)
+    sync = align.measure(signal, x48)
+    result.sync = {"offset_ms": round(sync.ms, 3), "correlation": round(sync.correlation, 3)}
+
+    t0 = time.perf_counter()
+    log(t("process.mastering"))
+    mastered, result.mastering = loudness.master(signal, planner.TARGET_LUFS, planner.TARGET_TRUE_PEAK)
+    timings["mastering"] = round(time.perf_counter() - t0, 1)
+
+    names = output_names(source, out_dir)
+    write_wav(names["audio"], mastered)
+    outputs = Outputs(audio=str(names["audio"]), plan=str(plan_path), summary=str(names["summary"]))
+    if info.has_video:
+        log(t("process.muxing"))
+        mux_video(source, names["audio"], names["video"])
+        outputs.video = str(names["video"])
+    result.outputs = outputs
+    timings["total"] = round(time.perf_counter() - started, 1)
+    result.seconds = timings
+    result.ok = True
+    write_text(names["summary"], dumps(result.to_dict()))
+    return result

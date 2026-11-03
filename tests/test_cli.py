@@ -5,6 +5,7 @@ import sys
 
 import pytest
 
+from conftest import ML_READY
 from voice_normal import cli, doctor, tools
 
 
@@ -56,11 +57,12 @@ def test_missing_input_is_usage_error(capsys, tmp_path):
     assert code == cli.EXIT_USAGE and payload["ok"] is False
 
 
-def test_unfinished_commands_say_so(capsys, tmp_path):
+def test_broken_input_is_clean_error(capsys, tmp_path):
     source = tmp_path / "запис камера.wav"
     source.write_bytes(b"")
-    code, _ = _run_json(capsys, "process", str(source))
-    assert code == cli.EXIT_NOT_READY
+    code, payload = _run_json(capsys, "process", str(source))
+    assert code == (cli.EXIT_FAIL if ML_READY else cli.EXIT_NOT_READY)
+    assert payload["ok"] is False and payload["error"]
 
 
 def _module_run(cwd, env_extra):
