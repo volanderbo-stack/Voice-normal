@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan = sub.add_parser("plan", parents=[common], help=t("cli.plan"))
     plan.add_argument("input", type=Path, help=t("cli.input"))
+    plan.add_argument("--out", type=Path, default=Path("cleaned"), help=t("cli.out"))
 
     process = sub.add_parser("process", parents=[common], help=t("cli.process"))
     process.add_argument("input", type=Path, help=t("cli.input"))
@@ -104,6 +105,36 @@ def cmd_install(args: argparse.Namespace) -> int:
     return EXIT_OK if result.ok else EXIT_FAIL
 
 
+def _check_input(args: argparse.Namespace) -> int | None:
+    if not args.input.is_file():
+        message = t("cli.input_missing", path=args.input)
+        _emit({"ok": False, "error": message}, message, args.json)
+        return EXIT_USAGE
+    return None
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    if (code := _check_input(args)) is not None:
+        return code
+    try:
+        from voice_normal import analyze, media, plan
+    except ImportError:
+        message = t("plan.need_install")
+        _emit({"ok": False, "error": message}, message, args.json)
+        return EXIT_FAIL
+    try:
+        info, analysis = analyze.analyze(args.input)
+    except (media.MediaError, OSError) as exc:
+        message = t("plan.media_error", error=exc)
+        _emit({"ok": False, "error": message}, message, args.json)
+        return EXIT_FAIL
+    result = plan.build_plan(info, analysis)
+    json_path, _ = plan.write(result, args.input, args.out)
+    text = plan.render(result) + "\n" + t("plan.written", json=json_path)
+    _emit({"ok": True, "plan_path": str(json_path), **result.to_dict()}, text, args.json)
+    return EXIT_OK
+
+
 def _not_ready(args: argparse.Namespace, stage: int) -> int:
     if getattr(args, "input", None) is not None and not args.input.exists():
         message = t("cli.input_missing", path=args.input)
@@ -117,7 +148,7 @@ def _not_ready(args: argparse.Namespace, stage: int) -> int:
 COMMANDS = {
     "doctor": cmd_doctor,
     "install": cmd_install,
-    "plan": lambda args: _not_ready(args, 3),
+    "plan": cmd_plan,
     "process": lambda args: _not_ready(args, 4),
 }
 

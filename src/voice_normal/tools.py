@@ -37,7 +37,7 @@ def find_tool(name: str) -> Path | None:
     return Path(found) if found else None
 
 
-def run_tool(args: list[str | Path], timeout: float = 30) -> subprocess.CompletedProcess[str]:
+def run_tool(args: list[str | Path], timeout: float | None = 30) -> subprocess.CompletedProcess[str]:
     """Запуск зовнішньої програми: лише список аргументів, без shell=True.
 
     Вивід декодуємо як UTF-8 із заміною: ffmpeg друкує шляхи з кирилицею в UTF-8.
