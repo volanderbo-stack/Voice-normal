@@ -13,10 +13,13 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 45
-    env:
-      VOICE_NORMAL_HOME: ${{ runner.temp }}\vn-home
     steps:
       - uses: actions/checkout@v4
+
+      # Контекст runner недоступний у env рівня job, тому змінну задає окремий крок.
+      - name: Data folder outside the workspace
+        shell: pwsh
+        run: Add-Content $env:GITHUB_ENV "VOICE_NORMAL_HOME=$env:RUNNER_TEMP\vn-home" -Encoding utf8
 
       - uses: astral-sh/setup-uv@v6
         with:
